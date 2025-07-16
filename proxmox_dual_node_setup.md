@@ -1,107 +1,127 @@
-# Proxmox VE Node Setup (for Dual-Node Cluster)
+# Proxmox Node Setup Guide (with NFS Storage and Quorum-Only NUC)
 
-This guide walks you through installing and configuring Proxmox VE on **two separate PCs**, which will act as your main compute nodes for running virtual machines (VMs) and containers. These nodes will connect to a shared ZFS-backed NFS storage server (the NUC) previously configured.
+This guide walks you through setting up your two main Proxmox nodes, which will run all VMs and containers. Shared storage is provided by the Intel NUC over NFS, and the NUC also serves as a quorum-only node for improved cluster reliability.
 
 ---
 
-## 🛠️ Part 1: Requirements
+## 🛠️ Part 1: What You’ll Need
 
 - 2 desktop PCs with:
-  - Intel CPUs (compatible with virtualization)
-  - Minimum 8 GB RAM (16+ GB recommended)
-  - SSD or HDD for local Proxmox OS install
-- Wired Ethernet connection on the same LAN
-- Proxmox VE installer USB stick
-- Static IP addresses for each node
-- Access to the Intel NUC running NFS over `/nfs`
+  - Intel CPUs (64-bit)
+  - At least 8 GB RAM (16+ GB recommended)
+  - SSD or HDD for OS installation
+- Proxmox VE ISO: [https://www.proxmox.com/en/downloads](https://www.proxmox.com/en/downloads)
+- USB stick (4GB+) to flash installer
+- Access to Proxmox Web UI via browser
 
 ---
 
-## 💽 Part 2: Install Proxmox VE on Each Node
+## 💽 Part 2: Install Proxmox VE
 
-Repeat the steps below on **each PC**:
-
-1. Download the latest Proxmox ISO:  
-   https://www.proxmox.com/en/downloads
-2. Flash it to USB using Rufus or balenaEtcher.
-3. Boot the PC, press the appropriate key to access the boot menu (usually F10/F12/ESC/DEL).
-4. Select the USB stick and start the **Proxmox VE installer**.
-5. Follow the prompts:
-   - Accept license
-   - Select your internal SSD/HDD for install
-   - Choose `ext4` unless you want to test ZFS locally
-   - Set hostname: `pve-node1` and `pve-node2`
-   - Set static IPs: `192.168.1.11` and `192.168.1.12` (adjust to fit your LAN)
-   - Set root password and email
-6. Reboot and access the web UI via:  
-   `https://<node-ip>:8006`
-
----
-
-## 🔧 Part 3: Initial Node Configuration
-
-1. Log in to each node's web UI using `root` and the password.
-2. Update each node:
-   - Web UI → **Datacenter → Node → Updates → Refresh → Upgrade**
-   - Or via shell:
-   ```bash
-   apt update
-   apt full-upgrade
+1. Flash the Proxmox ISO using Rufus or balenaEtcher
+2. Boot each desktop and press `F12`/`F10` to choose the USB
+3. Install Proxmox VE:
+   - Choose ext4 or ZFS (ext4 is fine for OS-only use)
+   - Set hostname (e.g., `pve-node1`, `pve-node2`)
+   - Set static IP addresses
+   - Create login password and email
+4. After install, access the Web UI at:
+   ```
+   https://<node-ip>:8006
    ```
 
 ---
 
-## 🌐 Part 4: Add Shared NFS Storage
+## 🔗 Part 3: Create Cluster
 
-On **both nodes**:
-
-1. Go to: **Datacenter → Storage → Add → NFS**
-2. Set:
-   - ID: `nfs-nuc`
-   - Server: IP of your NUC
-   - Export: `/nfs`
-   - Content types: Disk image, ISO, Backup, Container template
-   - Nodes: Select both nodes
-3. Save and test storage visibility
-
----
-
-## 🖧 Part 5: Cluster Creation
-
-On **Node 1 (e.g., pve-node1)**:
+1. On **pve-node1**:
 ```bash
-pvecm create my-cluster
+pvecm create mycluster
 ```
 
-On **Node 2 (e.g., pve-node2)**:
+2. On **pve-node2**:
 ```bash
 pvecm add <IP-of-node1>
 ```
-- This will synchronize configurations and enable centralized management.
 
-After this, both nodes will appear in the **same web UI**, and you can manage them from either interface.
-
----
-
-## 🧪 Part 6: Test Cluster and Storage
-
-- Ensure both nodes appear under **Datacenter → Cluster**
-- Create a test VM or container on one node
-- Store it on the NFS volume
-- Migrate it to the second node (right-click → Migrate)
-
----
-
-## 📦 Summary
-
-| Component | Role |
-|----------|------|
-| Node 1 | Proxmox VE | Host VMs/CTs |
-| Node 2 | Proxmox VE | Host VMs/CTs |
-| Shared Storage | NFS from NUC | Centralized VM data |
-| Networking | LAN (Gigabit recommended) | Connects all nodes |
+3. On the **NUC (Ubuntu Server)**:
+   - Install Corosync:
+   ```bash
+   sudo apt install corosync
+   ```
+   - Join the cluster:
+   ```bash
+   pvecm add <IP-of-node1>
+   ```
+   - Verify:
+   ```bash
+   pvecm status
+   ```
 
 ---
 
-You're now ready to deploy Home Assistant, Node-RED, Mosquitto, and more across your Proxmox cluster using shared storage.
+## 📡 Part 4: Mount NFS Storage from the NUC
 
+On both Proxmox nodes:
+
+1. Go to: **Datacenter → Storage → Add → NFS**
+2. Fill in:
+   - **ID**: `nfs-nuc`
+   - **Server**: `<IP of NUC>`
+   - **Export**: `/nfs`
+   - **Content**: Disk image, ISO, VZDump backup file
+   - **Nodes**: All
+3. Save and verify the storage appears under `Datacenter → Storage`
+
+> 🧠 The NUC hosts this NFS share using a ZFS RAID 1 pool
+
+---
+
+## 🖥️ Part 5: VM and Container Usage
+
+- All VM disks and backups should use the `nfs-nuc` storage
+- Avoid using local storage (`local-lvm` or `local`) for VM disks
+- Create or migrate VMs using:
+  - Proxmox Web UI → Create VM → Hard Disk → Storage: `nfs-nuc`
+
+---
+
+## ♻️ Part 6: High Availability (Optional)
+
+1. Enable HA services:
+   - Go to **Datacenter → HA**
+   - Create HA groups with both nodes
+2. Assign critical VMs to HA groups
+3. Proxmox will manage automatic failover if one node goes offline
+
+> The NUC ensures quorum remains valid so failover can occur
+
+---
+
+## 🧼 Part 7: NUC Role Restrictions
+
+In Proxmox Web UI:
+
+- Go to **Datacenter → Storage**
+- For each NFS entry, uncheck the NUC node
+- Confirm the NUC is not assigned any:
+  - Disk image
+  - ISO
+  - Backup
+  - Container storage
+
+✅ This ensures it is **quorum-only** and not used for compute or storage
+
+---
+
+## ✅ Final Architecture Overview
+
+| Node        | OS                  | Role                          |
+|-------------|---------------------|-------------------------------|
+| pve-node1   | Proxmox VE          | Runs VMs & containers         |
+| pve-node2   | Proxmox VE          | Runs VMs & containers         |
+| nuc-nfs     | Ubuntu Server 22.04 | ZFS RAID 1 NFS + quorum-only ✅ |
+
+---
+
+This architecture ensures full **high availability**, **centralized shared storage**, and a **resilient Proxmox cluster** using three low-cost, flexible machines.
