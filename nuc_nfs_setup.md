@@ -1,15 +1,16 @@
-# Intel NUC NFS Server Setup with ZFS RAID 1 (Ubuntu Server 22.04 LTS)
+# Intel NUC NFS Server + Proxmox Quorum-Only Node Setup (Ubuntu Server 22.04 LTS)
 
-This guide will walk you through configuring your Intel NUC as a dedicated NFS server with mirrored SSDs using ZFS RAID 1, to serve two Proxmox nodes with shared storage.
+This guide walks you through setting up your Intel NUC6i3SYH as a **dedicated NFS server** with **ZFS RAID 1** and adds it as a **quorum-only node** to your Proxmox cluster. This ensures shared storage for VM/container workloads and improves cluster stability without running VMs on the NUC itself.
 
 ---
 
 ## 🛠️ Part 1: What You’ll Need
 
 - Intel NUC6i3SYH
-- 2x matching SSDs (SATA or M.2)
+- 1x M.2 SATA SSD (boot drive)
+- 2x identical 2.5" SATA SSDs (ZFS mirror via USB 3.0 enclosures)
 - USB stick (4GB+) with Ubuntu Server 22.04 LTS
-- Ethernet cable for wired LAN
+- Ethernet cable (for static LAN connection)
 - Access to another computer for flashing the installer
 
 ---
@@ -18,13 +19,13 @@ This guide will walk you through configuring your Intel NUC as a dedicated NFS s
 
 1. Download the ISO: https://ubuntu.com/download/server
 2. Flash it to USB using balenaEtcher or Rufus
-3. Boot NUC and press `F10` to select the USB stick
+3. Boot NUC and press `F10` to select USB stick
 4. Install Ubuntu Server:
    - Choose minimal installation
-   - Use one SSD for OS install (or create a small partition manually)
-   - Set a static IP (recommended for NFS)
-   - Set hostname (e.g. `nuc-nfs.local`)
-   - Set a strong username and password
+   - Install to the **M.2 SATA SSD** (do not install ZFS root)
+   - Set a **static IP** (e.g., `192.168.1.13`)
+   - Set hostname (e.g., `nuc-nfs`)
+   - Choose strong credentials
 
 ---
 
@@ -36,18 +37,19 @@ sudo apt update
 sudo apt install zfsutils-linux
 ```
 
-2. Identify your SSDs:
+2. Identify your external SSDs:
 ```bash
 lsblk
 ```
 
-3. Create a ZFS mirror (RAID 1) using the two SSDs:
+3. Create a ZFS mirror (RAID 1) using the USB-attached SSDs:
 ```bash
 sudo zpool create -m /nfs nfsdata mirror /dev/sda /dev/sdb
 ```
-*(Replace `/dev/sda` and `/dev/sdb` with the actual device names)*
 
-4. Verify the pool:
+*(Replace with actual device paths.)*
+
+4. Confirm:
 ```bash
 zpool status
 ```
@@ -56,23 +58,22 @@ zpool status
 
 ## 📡 Part 4: Set Up the NFS Server
 
-1. Install NFS server:
+1. Install NFS tools:
 ```bash
 sudo apt install nfs-kernel-server
 ```
 
-2. Configure NFS export:
+2. Edit exports:
 ```bash
 sudo nano /etc/exports
 ```
 
-Add the following line:
+Add:
 ```
 /nfs 192.168.1.0/24(rw,sync,no_subtree_check,no_root_squash)
 ```
-*(Adjust the subnet to match your LAN)*
 
-3. Apply the export:
+3. Apply:
 ```bash
 sudo exportfs -a
 sudo systemctl restart nfs-kernel-server
@@ -80,26 +81,50 @@ sudo systemctl restart nfs-kernel-server
 
 ---
 
-## 🔁 Part 5: Connect from Proxmox Nodes
+## 🔗 Part 5: Join the Proxmox Cluster (Quorum-Only Node)
 
-On each Proxmox node:
+1. On Proxmox Node 1:
+```bash
+pvecm add <NUC-IP>
+```
+
+2. On the NUC:
+```bash
+sudo apt install corosync
+pvecm add 192.168.1.11
+```
+
+3. Confirm:
+```bash
+pvecm status
+```
+
+4. In the Proxmox Web UI:
+   - Don’t assign the NUC any storage or VM roles
+   - Leave it as **quorum-only**
+
+---
+
+## 🔁 Part 6: Add NFS Storage to Proxmox
+
+On both Proxmox nodes:
 
 1. Go to: **Datacenter → Storage → Add → NFS**
-2. Set:
+2. Configure:
    - ID: `nfs-nuc`
    - Server: `<NUC IP>`
    - Export: `/nfs`
    - Content: Disk image, ISO, VZDump backup file
-   - Nodes: (all)
-3. Save
+   - Nodes: All
+3. Save and verify availability
 
 ---
 
-## 🧪 Part 6: Test and Monitor
+## 🧪 Part 7: Test & Monitor
 
-- Confirm the NFS mount appears in Proxmox storage
-- Test creating a VM or backup on the NFS share
-- Check ZFS health:
+- Confirm `/nfs` appears in Proxmox storage list
+- Test creating a VM or backup
+- Run:
 ```bash
 zpool status
 zpool scrub nfsdata
@@ -107,31 +132,35 @@ zpool scrub nfsdata
 
 ---
 
-## 📦 Summary
+## ✅ System Summary
 
 | Component | Role |
 |----------|------|
-| NUC OS | Ubuntu Server 22.04 LTS |
-| Storage | ZFS RAID 1 using two SSDs |
-| Export | `/nfs` via NFS to Proxmox nodes |
-| Purpose | Shared VM storage and backups |
+| OS       | Ubuntu Server 22.04 LTS |
+| Storage  | 2x SSDs in ZFS RAID 1 via USB |
+| NFS Path | `/nfs` |
+| Cluster  | Quorum-only Proxmox node (no VMs run here) |
 
 ---
 
 ## 🔄 What if SSD #1 (boot) fails?
 
-If the boot SSD (running Ubuntu) fails:
+If the **boot SSD** fails:
 
-1. Your ZFS RAID 1 pool (`/nfs`) is **untouched** and **fully intact**.
-2. Simply reinstall Ubuntu Server on a new SSD (ext4, like before).
-3. After booting into the new install, re-import your ZFS pool:
-
+1. Reinstall Ubuntu Server on a new SSD (M.2 or internal)
+2. Reinstall ZFS:
 ```bash
 sudo apt install zfsutils-linux
+```
+3. Re-import your pool:
+```bash
 sudo zpool import nfsdata
 ```
 
-✅ Your NFS data will reappear exactly as before  
-✅ No data loss  
-✅ No RAID rebuild necessary  
-✅ Easy recovery process
+✅ Your data remains safe  
+✅ NFS share is preserved  
+✅ No pool rebuild needed
+
+---
+
+This setup provides **reliable shared storage and cluster stability** using the NUC — without running any VMs or containers on it.
