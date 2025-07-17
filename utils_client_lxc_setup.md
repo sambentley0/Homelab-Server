@@ -38,3 +38,39 @@ In the console or via SSH:
 apt update && apt upgrade -y
 apt install curl cron nano wget -y
 ```
+
+---
+
+## 🐤 Step 3: Set Up DuckDNS Updater Script
+
+1. Go to https://www.duckdns.org
+2. Sign in and register your subdomain (e.g. `myhome.duckdns.org`)
+3. Copy your **token**
+
+Create the update script:
+
+```bash
+nano /root/duckdns.sh
+```
+
+Paste:
+```bash
+echo url="https://www.duckdns.org/update?domains=myhome&token=YOUR-TOKEN&ip=" | curl -k -o /root/duckdns.log -K -
+```
+
+Make it executable:
+
+```bash
+chmod +x /root/duckdns.sh
+```
+
+Add it to `cron`:
+
+```bash
+crontab -e
+```
+
+Add:
+```bash
+*/5 * * * * /root/duckdns.sh >/dev/null 2>&1
+```
